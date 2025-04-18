@@ -1,10 +1,21 @@
 
 import React, { createContext, useState, useContext, useEffect, ReactNode } from 'react';
-import { ArticleData, getArticleByNumber, getAllArticles } from '../lib/googleApi';
-import { textToSpeech } from '../lib/googleApi';
+import { 
+  ArticleData, 
+  getArticleByNumber, 
+  getAllArticles, 
+  textToSpeech, 
+  preprocessTextForTTS,
+  searchArticleAcrossSheets
+} from '../lib/googleApi';
 import * as ttsService from '../lib/ttsService';
-import { getArticleExplanation } from '@/lib/geminiApi';
+import { 
+  getArticleExplanation, 
+  getAutoAnnotation,
+  askGeminiAboutArticle
+} from '@/lib/geminiApi';
 import { toast } from '@/components/ui/use-toast';
+import { exportToPdf } from '@/lib/exportUtils';
 
 // Define the context type
 interface ArticleContextType {
@@ -17,12 +28,13 @@ interface ArticleContextType {
   isFavorite: (articleNumber: string) => boolean;
   annotations: Record<string, string>;
   saveAnnotation: (articleNumber: string, annotation: string) => void;
+  generateAutoAnnotation: (articleNumber: string, articleText: string) => Promise<string>;
   playArticleAudio: (articleText: string) => Promise<void>;
   stopAudio: () => void;
   isPlaying: boolean;
   error: string | null;
-  highlights: Record<string, string[]>;
-  addHighlight: (articleNumber: string, text: string) => void;
+  highlights: Record<string, { text: string, color: string }[]>;
+  addHighlight: (articleNumber: string, text: string, color?: string) => void;
   removeHighlight: (articleNumber: string, text: string) => void;
   articleImages: Record<string, string[]>;
   addImage: (articleNumber: string, imageDataUrl: string) => void;
@@ -30,9 +42,13 @@ interface ArticleContextType {
   articleAudios: Record<string, string[]>;
   addAudio: (articleNumber: string, audioDataUrl: string) => void;
   removeAudio: (articleNumber: string, index: number) => void;
-  getExplanation: (articleNumber: string, articleText: string) => Promise<string>;
+  getExplanation: (articleNumber: string, articleText: string, sheetName?: string) => Promise<string>;
+  askQuestion: (question: string, articleNumber: string, articleText: string, sheetName?: string) => Promise<string>;
   explanations: Record<string, string>;
   isLoadingExplanation: boolean;
+  currentPlayingArticle: string | null;
+  copyArticleText: (articleText: string, formatted?: boolean) => void;
+  exportArticleToPdf: (article: ArticleData) => Promise<void>;
 }
 
 // Create the context
@@ -52,41 +68,42 @@ export const ArticleProvider: React.FC<ArticleProviderProps> = ({ children }) =>
   const [favorites, setFavorites] = useState<string[]>([]);
   const [annotations, setAnnotations] = useState<Record<string, string>>({});
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
-  const [highlights, setHighlights] = useState<Record<string, string[]>>({});
+  const [highlights, setHighlights] = useState<Record<string, { text: string, color: string }[]>>({});
   const [articleImages, setArticleImages] = useState<Record<string, string[]>>({});
   const [articleAudios, setArticleAudios] = useState<Record<string, string[]>>({});
   const [explanations, setExplanations] = useState<Record<string, string>>({});
   const [isLoadingExplanation, setIsLoadingExplanation] = useState<boolean>(false);
+  const [currentPlayingArticle, setCurrentPlayingArticle] = useState<string | null>(null);
   
   // Load data from local storage on mount
   useEffect(() => {
     const loadStoredData = () => {
-      const savedFavorites = localStorage.getItem('vademecum_favorites');
+      const savedFavorites = localStorage.getItem('wadmecon_favorites');
       if (savedFavorites) {
         setFavorites(JSON.parse(savedFavorites));
       }
       
-      const savedAnnotations = localStorage.getItem('vademecum_annotations');
+      const savedAnnotations = localStorage.getItem('wadmecon_annotations');
       if (savedAnnotations) {
         setAnnotations(JSON.parse(savedAnnotations));
       }
       
-      const savedHighlights = localStorage.getItem('vademecum_highlights');
+      const savedHighlights = localStorage.getItem('wadmecon_highlights');
       if (savedHighlights) {
         setHighlights(JSON.parse(savedHighlights));
       }
       
-      const savedImages = localStorage.getItem('vademecum_images');
+      const savedImages = localStorage.getItem('wadmecon_images');
       if (savedImages) {
         setArticleImages(JSON.parse(savedImages));
       }
       
-      const savedAudios = localStorage.getItem('vademecum_audios');
+      const savedAudios = localStorage.getItem('wadmecon_audios');
       if (savedAudios) {
         setArticleAudios(JSON.parse(savedAudios));
       }
       
-      const savedExplanations = localStorage.getItem('vademecum_explanations');
+      const savedExplanations = localStorage.getItem('wadmecon_explanations');
       if (savedExplanations) {
         setExplanations(JSON.parse(savedExplanations));
       }
@@ -100,7 +117,7 @@ export const ArticleProvider: React.FC<ArticleProviderProps> = ({ children }) =>
     const loadInitialArticles = async () => {
       setIsLoading(true);
       try {
-        const initialArticles = await getAllArticles(50); // Limit to 50 for better performance
+        const initialArticles = await getAllArticles('Sheet1', 10); // Limit to 10 for better performance
         setArticles(initialArticles);
       } catch (err) {
         console.error('Failed to load initial articles:', err);
@@ -113,23 +130,28 @@ export const ArticleProvider: React.FC<ArticleProviderProps> = ({ children }) =>
     loadInitialArticles();
   }, []);
   
-  // Search for an article by number
+  // Search for an article by number across all sheets
   const searchArticle = async (articleNumber: string) => {
     setIsLoading(true);
     setError(null);
     
     try {
-      const article = await getArticleByNumber(articleNumber);
+      const article = await searchArticleAcrossSheets(articleNumber);
       
       if (article) {
         setCurrentArticle(article);
         
         // Add to articles array if not already there
-        if (!articles.some(a => a.articleNumber === article.articleNumber)) {
-          setArticles(prev => [...prev, article]);
+        if (!articles.some(a => a.articleNumber === article.articleNumber && a.sheetName === article.sheetName)) {
+          setArticles(prev => [article, ...prev]);
         }
+        
+        toast({
+          title: `Artigo ${articleNumber} encontrado`,
+          description: article.sheetName ? `Na lei/código: ${article.sheetName}` : undefined
+        });
       } else {
-        setError(`Artigo ${articleNumber} não encontrado.`);
+        setError(`Artigo ${articleNumber} não encontrado em nenhuma lei.`);
         toast({
           variant: "destructive",
           title: "Artigo não encontrado",
@@ -156,7 +178,12 @@ export const ArticleProvider: React.FC<ArticleProviderProps> = ({ children }) =>
       : [...favorites, articleNumber];
     
     setFavorites(newFavorites);
-    localStorage.setItem('vademecum_favorites', JSON.stringify(newFavorites));
+    localStorage.setItem('wadmecon_favorites', JSON.stringify(newFavorites));
+    
+    toast({
+      title: favorites.includes(articleNumber) ? "Artigo removido dos favoritos" : "Artigo adicionado aos favoritos",
+      description: `Artigo ${articleNumber} ${favorites.includes(articleNumber) ? "removido dos" : "adicionado aos"} favoritos.`
+    });
   };
   
   // Check if an article is favorited
@@ -168,7 +195,7 @@ export const ArticleProvider: React.FC<ArticleProviderProps> = ({ children }) =>
   const saveAnnotation = (articleNumber: string, annotation: string) => {
     const newAnnotations = { ...annotations, [articleNumber]: annotation };
     setAnnotations(newAnnotations);
-    localStorage.setItem('vademecum_annotations', JSON.stringify(newAnnotations));
+    localStorage.setItem('wadmecon_annotations', JSON.stringify(newAnnotations));
     
     toast({
       title: "Anotação salva",
@@ -176,17 +203,41 @@ export const ArticleProvider: React.FC<ArticleProviderProps> = ({ children }) =>
     });
   };
   
+  // Generate auto annotation using AI
+  const generateAutoAnnotation = async (articleNumber: string, articleText: string): Promise<string> => {
+    setIsLoading(true);
+    try {
+      const response = await getAutoAnnotation(articleText);
+      
+      if (response.error) {
+        throw new Error(response.error);
+      }
+      
+      return response.text;
+    } catch (err) {
+      console.error('Error generating auto annotation:', err);
+      toast({
+        variant: "destructive",
+        title: "Erro na geração de anotação",
+        description: "Não foi possível gerar anotações automáticas."
+      });
+      return "Não foi possível gerar anotações automáticas. Tente novamente mais tarde.";
+    } finally {
+      setIsLoading(false);
+    }
+  };
+  
   // Add a highlighted text segment
-  const addHighlight = (articleNumber: string, text: string) => {
+  const addHighlight = (articleNumber: string, text: string, color: string = "highlighted") => {
     const articleHighlights = highlights[articleNumber] || [];
     
-    if (!articleHighlights.includes(text)) {
+    if (!articleHighlights.some(h => h.text === text)) {
       const newHighlights = { 
         ...highlights, 
-        [articleNumber]: [...articleHighlights, text] 
+        [articleNumber]: [...articleHighlights, { text, color }] 
       };
       setHighlights(newHighlights);
-      localStorage.setItem('vademecum_highlights', JSON.stringify(newHighlights));
+      localStorage.setItem('wadmecon_highlights', JSON.stringify(newHighlights));
     }
   };
   
@@ -194,15 +245,15 @@ export const ArticleProvider: React.FC<ArticleProviderProps> = ({ children }) =>
   const removeHighlight = (articleNumber: string, text: string) => {
     const articleHighlights = highlights[articleNumber] || [];
     
-    if (articleHighlights.includes(text)) {
-      const newArticleHighlights = articleHighlights.filter(t => t !== text);
+    if (articleHighlights.some(h => h.text === text)) {
+      const newArticleHighlights = articleHighlights.filter(h => h.text !== text);
       const newHighlights = { 
         ...highlights, 
         [articleNumber]: newArticleHighlights 
       };
       
       setHighlights(newHighlights);
-      localStorage.setItem('vademecum_highlights', JSON.stringify(newHighlights));
+      localStorage.setItem('wadmecon_highlights', JSON.stringify(newHighlights));
     }
   };
   
@@ -215,7 +266,7 @@ export const ArticleProvider: React.FC<ArticleProviderProps> = ({ children }) =>
     };
     
     setArticleImages(newImages);
-    localStorage.setItem('vademecum_images', JSON.stringify(newImages));
+    localStorage.setItem('wadmecon_images', JSON.stringify(newImages));
     
     toast({
       title: "Imagem adicionada",
@@ -237,7 +288,7 @@ export const ArticleProvider: React.FC<ArticleProviderProps> = ({ children }) =>
       };
       
       setArticleImages(newImages);
-      localStorage.setItem('vademecum_images', JSON.stringify(newImages));
+      localStorage.setItem('wadmecon_images', JSON.stringify(newImages));
       
       toast({
         title: "Imagem removida",
@@ -255,7 +306,7 @@ export const ArticleProvider: React.FC<ArticleProviderProps> = ({ children }) =>
     };
     
     setArticleAudios(newAudios);
-    localStorage.setItem('vademecum_audios', JSON.stringify(newAudios));
+    localStorage.setItem('wadmecon_audios', JSON.stringify(newAudios));
     
     toast({
       title: "Áudio adicionado",
@@ -277,7 +328,7 @@ export const ArticleProvider: React.FC<ArticleProviderProps> = ({ children }) =>
       };
       
       setArticleAudios(newAudios);
-      localStorage.setItem('vademecum_audios', JSON.stringify(newAudios));
+      localStorage.setItem('wadmecon_audios', JSON.stringify(newAudios));
       
       toast({
         title: "Áudio removido",
@@ -287,15 +338,16 @@ export const ArticleProvider: React.FC<ArticleProviderProps> = ({ children }) =>
   };
   
   // Get explanation from Gemini API
-  const getExplanation = async (articleNumber: string, articleText: string): Promise<string> => {
+  const getExplanation = async (articleNumber: string, articleText: string, sheetName?: string): Promise<string> => {
     // Return cached explanation if available
-    if (explanations[articleNumber]) {
-      return explanations[articleNumber];
+    const cacheKey = `${articleNumber}-${sheetName || ''}`;
+    if (explanations[cacheKey]) {
+      return explanations[cacheKey];
     }
     
     setIsLoadingExplanation(true);
     try {
-      const response = await getArticleExplanation(articleText);
+      const response = await getArticleExplanation(articleText, articleNumber, sheetName);
       
       if (response.error) {
         throw new Error(response.error);
@@ -304,11 +356,11 @@ export const ArticleProvider: React.FC<ArticleProviderProps> = ({ children }) =>
       // Save explanation
       const newExplanations = {
         ...explanations,
-        [articleNumber]: response.text
+        [cacheKey]: response.text
       };
       
       setExplanations(newExplanations);
-      localStorage.setItem('vademecum_explanations', JSON.stringify(newExplanations));
+      localStorage.setItem('wadmecon_explanations', JSON.stringify(newExplanations));
       
       return response.text;
     } catch (err) {
@@ -324,6 +376,30 @@ export const ArticleProvider: React.FC<ArticleProviderProps> = ({ children }) =>
     }
   };
   
+  // Ask a question about an article using Gemini
+  const askQuestion = async (question: string, articleNumber: string, articleText: string, sheetName?: string): Promise<string> => {
+    setIsLoading(true);
+    try {
+      const response = await askGeminiAboutArticle(question, articleText, articleNumber, sheetName);
+      
+      if (response.error) {
+        throw new Error(response.error);
+      }
+      
+      return response.text;
+    } catch (err) {
+      console.error('Error asking question about article:', err);
+      toast({
+        variant: "destructive",
+        title: "Erro na consulta",
+        description: "Não foi possível obter uma resposta para sua pergunta."
+      });
+      return "Não foi possível obter uma resposta. Por favor, tente novamente mais tarde.";
+    } finally {
+      setIsLoading(false);
+    }
+  };
+  
   // Play article audio using TTS
   const playArticleAudio = async (articleText: string) => {
     setIsLoading(true);
@@ -336,17 +412,25 @@ export const ArticleProvider: React.FC<ArticleProviderProps> = ({ children }) =>
       if (isPlaying) {
         ttsService.stopAudio();
         setIsPlaying(false);
+        setCurrentPlayingArticle(null);
       }
       
+      // Preprocess text for better TTS
+      const processedText = preprocessTextForTTS(articleText);
+      
       // Get audio from TTS API
-      const audioBase64 = await textToSpeech(articleText);
+      const audioBase64 = await textToSpeech(processedText);
       
       // Play the audio
+      setCurrentPlayingArticle(currentArticle?.articleNumber || null);
       await ttsService.playAudio(audioBase64);
       setIsPlaying(true);
       
       // Handle when audio finishes
-      ttsService.isAudioPlaying();
+      ttsService.onAudioEnd(() => {
+        setIsPlaying(false);
+        setCurrentPlayingArticle(null);
+      });
     } catch (err) {
       console.error('Error playing audio:', err);
       setError('Falha ao reproduzir áudio.');
@@ -362,6 +446,105 @@ export const ArticleProvider: React.FC<ArticleProviderProps> = ({ children }) =>
   const stopAudio = () => {
     ttsService.stopAudio();
     setIsPlaying(false);
+    setCurrentPlayingArticle(null);
+  };
+  
+  // Copy article text to clipboard
+  const copyArticleText = (articleText: string, formatted: boolean = false) => {
+    if (formatted) {
+      // For formatted text, we need to use the clipboard API with HTML content
+      const formattedContent = `<div style="font-family: 'Georgia', serif; line-height: 1.6;">${articleText.replace(/\n/g, '<br>')}</div>`;
+      
+      // Use the Clipboard API to copy HTML content
+      const blob = new Blob([formattedContent], { type: 'text/html' });
+      const data = new ClipboardItem({ 'text/html': blob });
+      
+      navigator.clipboard.write([data]).then(
+        () => {
+          toast({
+            title: "Texto formatado copiado",
+            description: "O texto do artigo foi copiado para a área de transferência."
+          });
+        },
+        (err) => {
+          console.error('Error copying formatted text:', err);
+          // Fall back to plain text
+          copyArticleText(articleText, false);
+        }
+      );
+    } else {
+      // For plain text
+      navigator.clipboard.writeText(articleText).then(
+        () => {
+          toast({
+            title: "Texto copiado",
+            description: "O texto do artigo foi copiado para a área de transferência."
+          });
+        },
+        (err) => {
+          console.error('Error copying text:', err);
+          toast({
+            variant: "destructive",
+            title: "Erro ao copiar",
+            description: "Não foi possível copiar o texto do artigo."
+          });
+        }
+      );
+    }
+  };
+  
+  // Export article to PDF with explanation
+  const exportArticleToPdf = async (article: ArticleData) => {
+    try {
+      setIsLoading(true);
+      
+      // Get explanation if not already cached
+      let explanation = "";
+      const cacheKey = `${article.articleNumber}-${article.sheetName || ''}`;
+      
+      if (explanations[cacheKey]) {
+        explanation = explanations[cacheKey];
+      } else {
+        const explainResponse = await getArticleExplanation(
+          article.articleText, 
+          article.articleNumber,
+          article.sheetName
+        );
+        explanation = explainResponse.text;
+        
+        // Cache the explanation
+        const newExplanations = {
+          ...explanations,
+          [cacheKey]: explanation
+        };
+        setExplanations(newExplanations);
+        localStorage.setItem('wadmecon_explanations', JSON.stringify(newExplanations));
+      }
+      
+      // Create PDF with explanation
+      const explanationsMap = { [article.articleNumber]: explanation };
+      const pdfOutput = await exportToPdf([article], `artigo-${article.articleNumber}.pdf`, explanationsMap);
+      
+      // Create a download link
+      const link = document.createElement('a');
+      link.href = pdfOutput;
+      link.download = `artigo-${article.articleNumber}.pdf`;
+      link.click();
+      
+      toast({
+        title: "PDF gerado com sucesso",
+        description: "O arquivo foi baixado para o seu dispositivo."
+      });
+    } catch (error) {
+      console.error('Error exporting article to PDF:', error);
+      toast({
+        variant: "destructive",
+        title: "Erro na exportação",
+        description: "Não foi possível exportar o artigo para PDF."
+      });
+    } finally {
+      setIsLoading(false);
+    }
   };
   
   // Context value
@@ -375,6 +558,7 @@ export const ArticleProvider: React.FC<ArticleProviderProps> = ({ children }) =>
     isFavorite,
     annotations,
     saveAnnotation,
+    generateAutoAnnotation,
     playArticleAudio,
     stopAudio,
     isPlaying,
@@ -389,8 +573,12 @@ export const ArticleProvider: React.FC<ArticleProviderProps> = ({ children }) =>
     addAudio,
     removeAudio,
     getExplanation,
+    askQuestion,
     explanations,
-    isLoadingExplanation
+    isLoadingExplanation,
+    currentPlayingArticle,
+    copyArticleText,
+    exportArticleToPdf
   };
   
   return (
