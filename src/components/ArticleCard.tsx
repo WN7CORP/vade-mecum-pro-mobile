@@ -24,7 +24,6 @@ import {
   Highlighter, 
   Image as ImageIcon,
   Mic,
-  SpeechIcon,
   Sparkles,
   Clipboard,
   Loader2
@@ -52,10 +51,10 @@ export function ArticleCard({ article }: ArticleCardProps) {
     highlights,
     addHighlight,
     removeHighlight,
-    articleImages,
+    articleImages: allArticleImages,
     addImage,
     removeImage,
-    articleAudios,
+    articleAudios: allArticleAudios,
     addAudio,
     removeAudio,
     getExplanation,
@@ -75,8 +74,9 @@ export function ArticleCard({ article }: ArticleCardProps) {
   const cardRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   
-  const articleImages = useArticle().articleImages[article.articleNumber] || [];
-  const articleAudios = useArticle().articleAudios[article.articleNumber] || [];
+  // Get current article's images and audios
+  const articleImages = allArticleImages[article.articleNumber] || [];
+  const articleAudios = allArticleAudios[article.articleNumber] || [];
   
   // Handle text selection for highlighting
   const handleTextSelection = () => {
@@ -386,7 +386,7 @@ export function ArticleCard({ article }: ArticleCardProps) {
             </div>
             
             {/* Image Gallery */}
-            {articleImages.length > 0 && (
+            {articleImages && articleImages.length > 0 && (
               <div className="mt-4">
                 <h4 className="text-sm font-medium mb-2">Imagens</h4>
                 <div className="grid grid-cols-2 gap-2">
@@ -415,7 +415,7 @@ export function ArticleCard({ article }: ArticleCardProps) {
             )}
             
             {/* Audio List */}
-            {articleAudios.length > 0 && (
+            {articleAudios && articleAudios.length > 0 && (
               <div className="mt-4">
                 <h4 className="text-sm font-medium mb-2">Áudios</h4>
                 <div className="space-y-2">
