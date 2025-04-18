@@ -1,3 +1,4 @@
+
 import type { Config } from "tailwindcss";
 
 export default {
@@ -18,6 +19,11 @@ export default {
 			}
 		},
 		extend: {
+			fontFamily: {
+				serif: ['Playfair Display', 'serif'],
+				sans: ['Inter', 'sans-serif'],
+				mono: ['JetBrains Mono', 'monospace'],
+			},
 			colors: {
 				border: 'hsl(var(--border))',
 				input: 'hsl(var(--input))',
@@ -52,15 +58,19 @@ export default {
 					DEFAULT: 'hsl(var(--card))',
 					foreground: 'hsl(var(--card-foreground))'
 				},
-        legal: {
-          navy: '#1a365d',
-          slate: '#64748b',
-          gold: '#f59e0b',
-          lightGold: '#fbbf24',
-          paper: '#f8fafc',
-          ink: '#1e293b',
-          highlight: '#fef3c7'
-        },
+				legal: {
+					navy: '#1a365d',
+					slate: '#64748b',
+					gold: '#f59e0b',
+					lightGold: '#fbbf24',
+					paper: '#f8fafc',
+					ink: '#1e293b',
+					highlight: '#fef3c7',
+					darkNav: '#0f172a',
+					darkPaper: '#1e293b',
+					darkCard: '#334155',
+					darkText: '#e2e8f0'
+				},
 				sidebar: {
 					DEFAULT: 'hsl(var(--sidebar-background))',
 					foreground: 'hsl(var(--sidebar-foreground))',
@@ -93,11 +103,17 @@ export default {
 					to: {
 						height: '0'
 					}
+				},
+				'highlight': {
+					'0%': { backgroundColor: 'rgba(245, 158, 11, 0.3)' },
+					'50%': { backgroundColor: 'rgba(245, 158, 11, 0.5)' },
+					'100%': { backgroundColor: 'rgba(245, 158, 11, 0.3)' }
 				}
 			},
 			animation: {
 				'accordion-down': 'accordion-down 0.2s ease-out',
-				'accordion-up': 'accordion-up 0.2s ease-out'
+				'accordion-up': 'accordion-up 0.2s ease-out',
+				'highlight': 'highlight 2s ease-in-out'
 			}
 		}
 	},
